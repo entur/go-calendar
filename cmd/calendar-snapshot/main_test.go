@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"slices"
 	"strings"
 	"testing"
 
@@ -40,17 +41,45 @@ func TestRun_MatchesGenerate(t *testing.T) {
 
 func TestRun_Verify(t *testing.T) {
 	args := []string{"-start", "2026-11-01", "-end", "2026-12-01", "-basis", "utc-date-labels"}
-	_, out, _ := runCmd(args...)
+	code, out, stderr := runCmd(args...) // omitted: no verification
+	if code != 0 || out == "" {
+		t.Fatalf("without -verify-sha256: exit %d, %s", code, stderr)
+	}
 	sum := sha256.Sum256([]byte(out))
 	digest := hex.EncodeToString(sum[:])
 
-	code, verified, stderr := runCmd(append(args, "-verify-sha256", strings.ToUpper(digest))...)
+	code, verified, stderr := runCmd(append(args, "-verify-sha256", digest)...)
 	if code != 0 || verified != out {
 		t.Fatalf("matching digest: exit %d, %s", code, stderr)
 	}
 	code, mismatched, stderr := runCmd(append(args, "-verify-sha256", strings.Repeat("0", 64))...)
 	if code != 1 || mismatched != "" || !strings.Contains(stderr, "SHA-256 mismatch") {
 		t.Fatalf("mismatch: exit %d, stdout %q, stderr %q", code, mismatched, stderr)
+	}
+}
+
+// TestRun_VerifyInvalid: a present but empty or malformed digest (for
+// example an unset shell variable) is a usage error with nothing written,
+// never a skipped check.
+func TestRun_VerifyInvalid(t *testing.T) {
+	args := []string{"-start", "2026-11-02", "-end", "2026-11-03", "-basis", "utc-date-labels"}
+	_, out, _ := runCmd(args...)
+	sum := sha256.Sum256([]byte(out))
+	digest := hex.EncodeToString(sum[:])
+	for name, value := range map[string]string{
+		"explicitly empty": "",
+		"63 characters":    digest[:63],
+		"65 characters":    digest + "0",
+		"uppercase":        strings.ToUpper(digest),
+		"non-hex":          strings.Repeat("g", 64),
+		"space padded":     " " + digest[1:],
+	} {
+		for _, form := range [][]string{{"-verify-sha256", value}, {"-verify-sha256=" + value}} {
+			code, stdout, stderr := runCmd(append(slices.Clone(args), form...)...)
+			if code != 2 || stdout != "" || !strings.Contains(stderr, "-verify-sha256") {
+				t.Errorf("%s (%q): exit %d, stdout %d bytes, stderr %q", name, form, code, len(stdout), stderr)
+			}
+		}
 	}
 }
 

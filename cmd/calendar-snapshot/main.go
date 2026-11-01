@@ -6,7 +6,10 @@
 // It reads no files, fetches nothing and writes only to stdout (diagnostics
 // to stderr). With -verify-sha256 it writes the snapshot only if its
 // SHA-256 matches, and otherwise exits with status 1, so a pipeline never
-// receives unapproved bytes. Usage errors exit with status 2.
+// receives unapproved bytes. When the flag is present its value must be
+// exactly 64 lowercase hexadecimal characters; an empty or malformed value
+// (for example from an unset shell variable) is a usage error, never a
+// skipped check. Usage errors exit with status 2.
 //
 // Record the command line, this module's version and the Go version next to
 // the frozen file; they are not part of the snapshot bytes. Run a released
@@ -49,7 +52,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	basis := fs.String("basis", "", "date basis: utc-date-labels or oslo-civil-dates (required)")
 	daysOff := fs.String("daysoff", "none", "customary days off, comma-separated: onsdag-for-skjaertorsdag, julaften, nyttarsaften; or none")
 	closed := fs.String("closed", "", "one-off closure dates inside the span, comma-separated YYYY-MM-DD")
-	verify := fs.String("verify-sha256", "", "expected SHA-256 of the output in hex; on mismatch nothing is written and the exit status is 1")
+	verify := fs.String("verify-sha256", "", "expected SHA-256 of the output, 64 lowercase hex characters; on mismatch nothing is written and the exit status is 1")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return exitOK
@@ -61,6 +64,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if *start == "" || *end == "" || *basis == "" {
 		return usage(stderr, errors.New("-start, -end and -basis are required"))
+	}
+	// Presence, not the value, turns verification on: an explicitly empty
+	// digest must fail, not silently skip the check.
+	verifyRequested := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "verify-sha256" {
+			verifyRequested = true
+		}
+	})
+	if verifyRequested && !isSHA256Hex(*verify) {
+		return usage(stderr, fmt.Errorf("-verify-sha256: want 64 lowercase hex characters, got %d characters", len(*verify)))
 	}
 
 	r, err := parseRange(*start, *end)
@@ -80,10 +94,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return usage(stderr, err)
 	}
 
-	if *verify != "" {
+	if verifyRequested {
 		sum := sha256.Sum256(out)
 		got := hex.EncodeToString(sum[:])
-		if !strings.EqualFold(got, *verify) {
+		if got != *verify {
 			_, _ = fmt.Fprintf(stderr, "calendar-snapshot: SHA-256 mismatch: got %s, want %s; nothing written\n", got, *verify)
 			return exitMismatch
 		}
@@ -93,6 +107,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitMismatch
 	}
 	return exitOK
+}
+
+// isSHA256Hex reports whether s is exactly 64 lowercase hex characters.
+func isSHA256Hex(s string) bool {
+	if len(s) != 2*sha256.Size {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func usage(stderr io.Writer, err error) int {
