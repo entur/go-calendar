@@ -1,10 +1,12 @@
-# Audits every v* tag: each must point at a release-please release commit on
-# main whose version matches the tag name. Runs on tag push when that event
-# is delivered, daily from the default branch, on demand from main, and from
-# the release workflow after it creates a tag (a GITHUB_TOKEN tag push does
-# not trigger workflows). It reads the GitHub API only and never executes
-# code from the tags it inspects. This detects stray tags after creation;
-# it does not prevent them from being published or consumed.
+# Audits every v* tag with .github/scripts/tag-audit.sh (from main): each
+# must point at a release-please release commit on main whose manifest
+# records the tag's version and which came from a merged release-please pull
+# request by an allowed author. Runs on tag push when that event is
+# delivered, daily from the default branch, on demand from main, and from the
+# release workflow after it creates a tag (a GITHUB_TOKEN tag push does not
+# trigger workflows). It reads the GitHub API only and never executes code
+# from the tags it inspects. This detects stray tags after creation; it does
+# not prevent them from being published or consumed.
 name: Tag guard
 
 on:
@@ -25,43 +27,18 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The audit script always comes from main, never from the tag being
+      # inspected; it reads the GitHub API only.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: .github/scripts
       - name: Audit v* tags
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          fail=0
-          refs="$(gh api --paginate "repos/${REPO}/git/matching-refs/tags/v" \
-            --jq '.[] | [.ref, .object.type, .object.sha] | @tsv')"
-          while IFS=$'\t' read -r ref type sha; do
-            [ -n "${ref}" ] || continue
-            tag="${ref#refs/tags/}"
-            if [ "${type}" = "tag" ]; then
-              sha="$(gh api "repos/${REPO}/git/tags/${sha}" --jq '.object.sha')"
-            fi
-            version="${tag#v}"
-            if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::tag ${tag} is not a release version tag"
-              fail=1
-              continue
-            fi
-            subject="$(gh api "repos/${REPO}/commits/${sha}" --jq '.commit.message | split("\n") | .[0]')"
-            expected="^chore\(main\): release ${version//./\\.}( \(#[0-9]+\))?\$"
-            if ! [[ "${subject}" =~ ${expected} ]]; then
-              echo "::error::tag ${tag} (${sha}) does not point at the release-please commit for ${version}"
-              fail=1
-              continue
-            fi
-            status="$(gh api "repos/${REPO}/compare/main...${sha}" --jq '.status')"
-            if [ "${status}" != "behind" ] && [ "${status}" != "identical" ]; then
-              echo "::error::tag ${tag} (${sha}) is not on main (${status})"
-              fail=1
-              continue
-            fi
-            echo "tag ${tag} -> ${sha}: ok"
-          done <<< "${refs}"
-          exit "${fail}"
+        run: bash .github/scripts/tag-audit.sh
 
   notify:
     needs: audit

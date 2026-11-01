@@ -143,6 +143,20 @@ jobs:
       - name: Fuzz
         run: go test -run='^$' -fuzz="^${TARGET}\$" -fuzztime="${FUZZTIME}" "${PKG}"
 
+  scripts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ShellCheck
+        run: shellcheck .github/scripts/*.sh
+      - name: Tag audit script test (fake gh, no network)
+        run: bash .github/scripts/tag-audit_test.sh
+
   zizmor:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
