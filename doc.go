@@ -49,8 +49,9 @@
 //
 // A consumer that counts per UTC day may deliberately look those UTC date
 // labels up as if they were Norwegian dates. Activity between 00:00 and
-// 02:00 Norwegian summer time on 17 May then counts on the UTC date 16 May,
-// a working day. That is the consumer's documented convention, not an exact
+// 02:00 Norwegian summer time on 17 May 2024 then counts on the UTC date
+// 16 May 2024, a working day (in 2016 and 2027, 16 May is itself a
+// holiday). That is the consumer's documented convention, not an exact
 // legal day boundary; snapshots record it in their basis line.
 //
 // # Errors

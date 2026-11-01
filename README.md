@@ -66,7 +66,7 @@ calendar.DateAt(t, oslo)     // oslo loaded by you with time.LoadLocation("Europ
 
 The package never reads the clock, never picks the process-local zone itself, never calls `time.LoadLocation` and never loads tzdata. `Date.In(loc)` returns midnight on the date and reports `ErrNonexistentMidnight` rather than silently moving to another day when a zone skips midnight.
 
-**UTC date labels.** A consumer that counts per UTC day may deliberately look those UTC date labels up as if they were Norwegian dates. That is a convention, not an exact legal day boundary: activity between 00:00 and 02:00 Norwegian summer time on 17 May falls on the UTC date 16 May, which is a working day. Snapshots record which convention a consumer uses in their `basis` line (`utc-date-labels` or `oslo-civil-dates`).
+**UTC date labels.** A consumer that counts per UTC day may deliberately look those UTC date labels up as if they were Norwegian dates. That is a convention, not an exact legal day boundary: activity between 00:00 and 02:00 Norwegian summer time on 17 May 2024 falls on the UTC date 16 May 2024, which is a working day (in other years 16 May can itself be a holiday, as in 2016 and 2027). Snapshots record which convention a consumer uses in their `basis` line (`utc-date-labels` or `oslo-civil-dates`).
 
 ## Freezing a calendar
 
