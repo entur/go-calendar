@@ -23,14 +23,20 @@
 //	2026-11-02
 //
 // The header lines appear exactly once and in this order. daysoff is
-// "none" or the opted-in customary slugs in lexicographic order,
-// comma-joined. The span is [start, end). closed lists one-off closures
-// (sorted, unique, inside the span; weekend closures are metadata only).
-// excluded lists every Monday–Friday in the span that is not a workday,
-// sorted, with its reasons: the day-off observance slugs in Observance
-// order, then "closed" for a declared closure. days lists every workday,
-// sorted. excluded and days together are exactly the Monday–Friday dates of
-// the span. The Monday–Friday base is fixed for format version 1.
+// "none" or the listed daysoff options (onsdag-for-skjaertorsdag, julaften,
+// nyttarsaften) in lexicographic order, comma-joined; every other format-1
+// slug is always a day off. The span is [start, end). closed lists one-off
+// closures (sorted, unique, inside the span; weekend closures are metadata
+// only). excluded lists every Monday–Friday in the span that is not a
+// workday, sorted, with its reasons: the day-off slugs in format-1 registry
+// order (the Observance order format 1 was published with), then "closed"
+// for a declared closure. days lists every workday, sorted. excluded and
+// days together are exactly the Monday–Friday dates of the span. The
+// Monday–Friday base is fixed for format version 1.
+//
+// Format 1's slugs, daysoff options and reason order are a fixed registry
+// in this package, independent of the live calendar's classification, so a
+// later rules change cannot change how existing snapshots parse.
 //
 // The generator's module version and Go version are not part of the bytes;
 // record them next to the frozen file.
@@ -53,7 +59,8 @@ type Basis string
 // Known bases.
 const (
 	// UTCDateLabels: the consumer's days are UTC calendar dates, looked up
-	// as if they were Norwegian dates (entur/kompass's convention).
+	// as if they were Norwegian dates (for example statistics counted per
+	// UTC day).
 	UTCDateLabels Basis = "utc-date-labels"
 
 	// OsloCivilDates: the consumer's days are civil dates in Europe/Oslo.
@@ -76,7 +83,7 @@ func (b Basis) valid() bool { return b == UTCDateLabels || b == OsloCivilDates }
 
 type excludedRow struct {
 	date    calendar.Date
-	reasons calendar.ObservanceSet
+	reasons v1Set // format-1 registry entries
 	closed  bool
 }
 
@@ -89,7 +96,7 @@ type Frozen struct {
 	rules    string
 	basis    Basis
 	span     calendar.Range
-	daysOff  calendar.ObservanceSet // customary observances listed in the header
+	daysOff  v1Set // the format-1 options listed in the daysoff line
 	closed   []calendar.Date
 	excluded []excludedRow
 	days     []calendar.Date
@@ -100,7 +107,17 @@ type Frozen struct {
 // dates; closures are sorted and deduplicated. A closure on a weekday makes
 // that day a non-workday with reason "closed"; a weekend closure is kept as
 // metadata only.
+//
+// Generate maps the calendar onto the format-1 registry and fails if format 1
+// cannot represent it (an observance the registry does not know, or a
+// format-1 day off the calendar does not treat as one), so a rules change
+// that format 1 cannot express forces a deliberate format decision.
 func Generate(c calendar.Calendar, r calendar.Range, basis Basis, closed ...calendar.Date) ([]byte, error) {
+	return generate(c, liveModelOf(c), r, basis, closed)
+}
+
+// generate is Generate with the live classification as an explicit input.
+func generate(c calendar.Calendar, m liveModel, r calendar.Range, basis Basis, closed []calendar.Date) ([]byte, error) {
 	if !basis.valid() {
 		return nil, fmt.Errorf("Generate: unknown basis %q: %w", basis, ErrInvalidSnapshot)
 	}
@@ -119,13 +136,17 @@ func Generate(c calendar.Calendar, r calendar.Range, basis Basis, closed ...cale
 	}
 	slices.SortFunc(closedDates, calendar.Date.Compare)
 	closedDates = slices.Compact(closedDates)
+	options, err := m.v1Options()
+	if err != nil {
+		return nil, fmt.Errorf("Generate: %w", err)
+	}
 
 	f := &Frozen{
 		valid:   true,
 		rules:   calendar.RulesVersion,
 		basis:   basis,
 		span:    r,
-		daysOff: c.DaysOff() & calendar.Customary(),
+		daysOff: options,
 		closed:  closedDates,
 	}
 	all, _ := r.Dates() // r is valid
@@ -137,7 +158,11 @@ func Generate(c calendar.Calendar, r calendar.Range, basis Basis, closed ...cale
 		if err != nil {
 			return nil, fmt.Errorf("Generate: %w", err)
 		}
-		row := excludedRow{date: d, reasons: obs & c.DaysOff(), closed: containsDate(closedDates, d)}
+		reasons, err := m.v1Reasons(obs)
+		if err != nil {
+			return nil, fmt.Errorf("Generate: %s: %w", d, err)
+		}
+		row := excludedRow{date: d, reasons: reasons, closed: containsDate(closedDates, d)}
 		if row.reasons != 0 || row.closed {
 			f.excluded = append(f.excluded, row)
 		} else {
@@ -158,7 +183,10 @@ func Generate(c calendar.Calendar, r calendar.Range, basis Basis, closed ...cale
 // Parse never evaluates holiday rules: it does not establish that the
 // reasons are legally correct or that the bytes came from Generate. The
 // rules line is preserved metadata and need not equal the current
-// calendar.RulesVersion. Pin the approved bytes by SHA-256 in the consumer.
+// calendar.RulesVersion. Slugs, daysoff options and reason order come from
+// format 1's own registry, never from the live calendar's classification,
+// so a rules change cannot change how existing bytes parse or re-encode.
+// Pin the approved bytes by SHA-256 in the consumer.
 // Parse copies what it keeps; later changes to b do not affect the result.
 func Parse(b []byte) (*Frozen, error) {
 	if len(b) > maxBytes {
@@ -208,13 +236,14 @@ func (f *Frozen) Span() calendar.Range {
 }
 
 // DaysOff returns the observances that make a weekday a day off in this
-// snapshot: calendar.Statutory() plus the customary observances in its
-// daysoff line.
+// snapshot, as format 1 defines them: every format-1 slug that is not a
+// daysoff option, plus the options in its daysoff line. It does not depend
+// on the live calendar's classification.
 func (f *Frozen) DaysOff() calendar.ObservanceSet {
 	if !f.ok() {
 		return 0
 	}
-	return calendar.Statutory() | f.daysOff
+	return v1DaysOff(f.daysOff)
 }
 
 // Closed returns a copy of the declared closure dates.
@@ -287,7 +316,7 @@ func (f *Frozen) encode() []byte {
 	b.WriteString(formatLine + "\n")
 	b.WriteString("rules " + f.rules + "\n")
 	b.WriteString("basis " + string(f.basis) + "\n")
-	b.WriteString("daysoff " + daysOffString(f.daysOff) + "\n")
+	b.WriteString("daysoff " + f.daysOff.daysOffLine() + "\n")
 	b.WriteString("start " + f.span.Start().String() + "\n")
 	b.WriteString("end " + f.span.End().String() + "\n")
 	for _, d := range f.closed {
@@ -303,20 +332,8 @@ func (f *Frozen) encode() []byte {
 	return b.Bytes()
 }
 
-func daysOffString(s calendar.ObservanceSet) string {
-	var slugs []string
-	for o := range (s & calendar.Customary()).All() {
-		slugs = append(slugs, o.Slug())
-	}
-	if len(slugs) == 0 {
-		return "none"
-	}
-	slices.Sort(slugs)
-	return strings.Join(slugs, ",")
-}
-
 func reasonsString(row excludedRow) string {
-	s := row.reasons.String()
+	s := row.reasons.reasonsLine()
 	if row.closed {
 		if s != "" {
 			s += ","
@@ -334,17 +351,6 @@ func isWeekday(d calendar.Date) bool {
 func containsDate(sorted []calendar.Date, d calendar.Date) bool {
 	_, found := slices.BinarySearchFunc(sorted, d, calendar.Date.Compare)
 	return found
-}
-
-// observanceBySlug resolves a slug to an observance. Slugs are never
-// renamed, so every slug ever published resolves.
-func observanceBySlug(slug string) (calendar.Observance, bool) {
-	for o := range (calendar.Statutory() | calendar.Customary()).All() {
-		if o.Slug() == slug {
-			return o, true
-		}
-	}
-	return 0, false
 }
 
 type parser struct {
@@ -430,22 +436,22 @@ func validRules(s string) bool {
 	return true
 }
 
-func (p *parser) parseDaysOff(s string) (calendar.ObservanceSet, error) {
+func (p *parser) parseDaysOff(s string) (v1Set, error) {
 	if s == "none" {
 		return 0, nil
 	}
-	var set calendar.ObservanceSet
+	var set v1Set
 	prev := ""
 	for slug := range strings.SplitSeq(s, ",") {
-		o, ok := observanceBySlug(slug)
-		if !ok || o.Kind() != calendar.KindCustomary {
-			return 0, p.errorf("daysoff: %q is not a customary observance", slug)
+		i, ok := v1BySlug(slug)
+		if !ok || !formatV1()[i].option {
+			return 0, p.errorf("daysoff: %q is not a format-1 daysoff option", slug)
 		}
 		if slug <= prev {
 			return 0, p.errorf("daysoff: slugs must be sorted and unique")
 		}
 		prev = slug
-		set |= calendar.ObservanceSet(1) << o
+		set |= v1Bit(i)
 	}
 	return set, nil
 }
@@ -562,7 +568,7 @@ func (p *parser) weekdayInSpanAfter(f *Frozen, d calendar.Date, prev []calendar.
 
 func (p *parser) parseReasons(f *Frozen, d calendar.Date, s string) (excludedRow, error) {
 	row := excludedRow{date: d}
-	last := calendar.Observance(0)
+	last := -1
 	tokens := strings.Split(s, ",")
 	for i, slug := range tokens {
 		if slug == closedSlug {
@@ -572,18 +578,18 @@ func (p *parser) parseReasons(f *Frozen, d calendar.Date, s string) (excludedRow
 			row.closed = true
 			continue
 		}
-		o, ok := observanceBySlug(slug)
-		if !ok || o == calendar.Sondag {
+		i, ok := v1BySlug(slug)
+		if !ok || !formatV1()[i].reason {
 			return row, p.errorf("unknown reason %q", slug)
 		}
-		if o.Kind() == calendar.KindCustomary && f.daysOff&(calendar.ObservanceSet(1)<<o) == 0 {
+		if formatV1()[i].option && !f.daysOff.has(i) {
 			return row, p.errorf("%q is not in daysoff", slug)
 		}
-		if o <= last {
-			return row, p.errorf("reasons must be in observance order and unique")
+		if i <= last {
+			return row, p.errorf("reasons must be in registry order and unique")
 		}
-		last = o
-		row.reasons |= calendar.ObservanceSet(1) << o
+		last = i
+		row.reasons |= v1Bit(i)
 	}
 	if row.closed != containsDate(f.closed, d) {
 		return row, p.errorf(`"closed" reason for %s does not match the closed lines`, d)
