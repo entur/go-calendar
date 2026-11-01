@@ -3,8 +3,8 @@
 // module-zip rules (nested modules such as tools/, VCS directories, vendor
 // directories and symbolic links are excluded).
 //
-//	modhash -module github.com/entur/go-calendar -version v0.1.0 -rev v0.1.0 REPO
-//	modhash -module github.com/entur/go-calendar -version v0.1.0 DIR
+//	modhash -module github.com/entur/go-calendar -version v1.0.0 -rev v1.0.0 REPO
+//	modhash -module github.com/entur/go-calendar -version v1.0.0 DIR
 //
 // With -rev it hashes the committed tree at that git revision of the
 // repository REPO, using `git archive` as the go command does when it
@@ -40,7 +40,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("modhash", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	path := fs.String("module", "", "module path (required)")
-	version := fs.String("version", "", "module version, for example v0.1.0 (required)")
+	version := fs.String("version", "", "module version, for example v1.0.0 (required)")
 	rev := fs.String("rev", "", "git revision to hash instead of the files in DIR")
 	if err := fs.Parse(args); err != nil {
 		return err

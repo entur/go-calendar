@@ -61,7 +61,7 @@ The allowed authors are `ALLOWED_RELEASE_AUTHORS` at the top of the script; add 
 
 Scorecard runs weekly with published results. Its Signed-Releases check ignores source-only releases and may report an inconclusive or not-applicable result, because this module publishes no release assets. Record the result from the pinned Scorecard version rather than expecting a particular score.
 
-## Repository settings checklist (repository admin, before v0.1.0)
+## Repository settings checklist (repository admin, before the first release)
 
 - [ ] **Ruleset `main`:**
   - pull request required, 1 approval, code-owner review, dismiss stale approvals, approval of the latest push, conversation resolution;
