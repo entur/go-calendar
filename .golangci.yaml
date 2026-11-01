@@ -1,8 +1,8 @@
 version: "2"
 
-# Based on entur/go-logging's configuration, plus the linters ADR 0001
-# requires: errorlint, exhaustive, nolintlint, gochecknoglobals and
-# gochecknoinits (no package state).
+# A revive-heavy v2 configuration plus the linters ADR 0001 requires:
+# errorlint, exhaustive, nolintlint, gochecknoglobals and gochecknoinits
+# (no package state).
 linters:
   default: standard
   enable:

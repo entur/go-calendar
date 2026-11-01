@@ -179,12 +179,12 @@ func TestCalendar_RangeLimits(t *testing.T) {
 	}
 }
 
-// TestCalendar_KompassWindows: every 28-day window holds 20 weekdays; the
+// TestCalendar_28DayWindows: every 28-day window holds 20 weekdays; the
 // default calendar subtracts statutory weekday holidays.
-func TestCalendar_KompassWindows(t *testing.T) {
+func TestCalendar_28DayWindows(t *testing.T) {
 	var c Calendar
 	cases := map[string]int{
-		"2026-11-28": 20, // 2–27 Nov: no holidays (kompass calibration window)
+		"2026-11-28": 20, // 2–27 Nov: no holidays
 		"2026-12-31": 19, // 4–31 Dec: 25 Dec (Fri) off, 26 Dec is a Saturday; 24 and 31 Dec are workdays
 		"2027-01-01": 18, // 5 Dec–1 Jan: 25 Dec and 1 Jan (both Fridays) off
 		"2027-04-04": 17, // 8 Mar–4 Apr: skjærtorsdag 25 Mar, langfredag 26 Mar, annen påskedag 29 Mar

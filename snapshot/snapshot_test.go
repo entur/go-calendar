@@ -333,7 +333,7 @@ func TestGenerateParse_AllCombinations(t *testing.T) {
 	}
 }
 
-func TestGenerate_KompassSpan(t *testing.T) {
+func TestGenerate_TenYearSpan(t *testing.T) {
 	b, err := Generate(calendar.Calendar{}, span(t, "2026-11-01", "2036-01-01"), UTCDateLabels)
 	if err != nil {
 		t.Fatal(err)

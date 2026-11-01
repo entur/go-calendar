@@ -46,7 +46,7 @@ func ExampleCalendar_Observances() {
 	// annen pinsedag (helligdag, helligdagsfredloven § 2 bokstav i)
 }
 
-// A kompass-style 28-day window ending on (and including) D.
+// A 28-day window ending on (and including) D.
 func ExampleCalendar_CountWorkdays() {
 	var c calendar.Calendar
 	d, _ := calendar.ParseDate("2026-12-31")

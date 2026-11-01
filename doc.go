@@ -47,11 +47,11 @@
 // tzdata. Passing time.Local lets the standard library consult the system
 // time zone; reproducible callers pass time.UTC or a location they loaded.
 //
-// A consumer may deliberately look up UTC date labels as if they were
-// Norwegian dates (entur/kompass does: its statistics are per UTC day). Use
-// between 00:00 and 02:00 Norwegian summer time on 17 May then counts on the
-// UTC date 16 May. That is the consumer's documented convention; snapshots
-// record it in their basis line.
+// A consumer that counts per UTC day may deliberately look those UTC date
+// labels up as if they were Norwegian dates. Activity between 00:00 and
+// 02:00 Norwegian summer time on 17 May then counts on the UTC date 16 May,
+// a working day. That is the consumer's documented convention, not an exact
+// legal day boundary; snapshots record it in their basis line.
 //
 // # Errors
 //

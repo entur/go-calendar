@@ -4,7 +4,7 @@
 
 Report suspected vulnerabilities privately through GitHub's private vulnerability reporting: open the repository's **Security** tab and choose **Report a vulnerability**. Please do not open a public issue.
 
-Include what you found, how to reproduce it, and the affected versions. We acknowledge reports within 5 working days, and triage and fix confirmed vulnerabilities within 30 days, following Entur's conventions. We coordinate disclosure with you and credit you in the advisory unless you ask us not to.
+Include what you found, how to reproduce it, and the affected versions. We acknowledge reports within 5 working days, and triage and fix confirmed vulnerabilities within 30 days. We coordinate disclosure with you and credit you in the advisory unless you ask us not to.
 
 ## Scope
 
@@ -21,4 +21,4 @@ Only the latest release receives fixes. A bad release is fixed forward and retra
 
 ## Verifying a release
 
-See "What 'signed release' means here" in the [README](README.md#what-signed-release-means-here).
+See "Verifying a release" in the [README](README.md#verifying-a-release).

@@ -1,6 +1,6 @@
 # Contributing
 
-Read [AGENTS.md](AGENTS.md) and [ADR 0001](doc/adr/0001-norwegian-calendar-design.adoc) first.
+Read [AGENTS.md](AGENTS.md) and [ADR 0001](doc/adr/0001-norwegian-calendar-design.adoc) first. CI, release and repository-settings material for maintainers is in [doc/maintainers.md](doc/maintainers.md).
 
 ## Checks
 
@@ -17,6 +17,7 @@ golangci-lint run                            # v2.15.0, .golangci.yaml
 go -C tools tool govulncheck -C .. ./...
 go test -run='^$' -fuzz='^FuzzParseDate$' -fuzztime=20s .   # also FuzzAddDays, FuzzNewRange, ./snapshot FuzzParse
 actionlint && uvx zizmor@1.31.1 --offline .github/
+shellcheck .github/scripts/*.sh && bash .github/scripts/tag-audit_test.sh
 ```
 
 Tests never use the network.
