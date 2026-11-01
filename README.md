@@ -105,7 +105,7 @@ Then, in the consuming program:
 
 ## Stability and versioning
 
-- Semantic versions, released from Conventional Commits. The first release is v0.1.0. v1.0.0 follows once a first consumer has integrated against the API; until then, minor releases may change the API.
+- Semantic versions, released from Conventional Commits. The API is stable from v1.0.0: a breaking change needs a new major version and module path (`github.com/entur/go-calendar/v2`), as Go modules require.
 - `RulesVersion` (currently `no-public/v1`) changes whenever any answer in a verified span changes, through a new law or a rule fix. A pure range extension keeps the identifier.
 - The snapshot format (`entur-calendar-snapshot 1`) and its observance slugs never change. A different format would be a new format version, and readers keep accepting format 1.
 - A bad release is fixed forward. The fix release adds a `retract` directive for the bad version, and tags are never deleted or moved.
