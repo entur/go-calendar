@@ -1,0 +1,57 @@
+# Audits every v* tag with .github/scripts/tag-audit.sh (from main): each
+# must point at a release-please release commit on main whose manifest
+# records the tag's version and which came from a merged release-please pull
+# request by an allowed author. Runs on tag push when that event is
+# delivered, daily from the default branch, on demand from main, and from the
+# release workflow after it creates a tag (a GITHUB_TOKEN tag push does not
+# trigger workflows). It reads the GitHub API only and never executes code
+# from the tags it inspects. This detects stray tags after creation; it does
+# not prevent them from being published or consumed.
+name: Tag guard
+
+on:
+  push:
+    tags: ["v*"]
+  schedule:
+    - cron: "41 5 * * *" # daily
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  audit:
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # The audit script always comes from main, never from the tag being
+      # inspected; it reads the GitHub API only.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Audit v* tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: bash .github/scripts/tag-audit.sh
+
+  notify:
+    needs: audit
+    if: failure()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open an issue for the maintainers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create --title "Tag audit failed" --body "A v* tag does not point at a release-please release commit on main. See ${RUN_URL}. Investigate before anyone consumes it, and retract the version if needed (tags are never moved or deleted)."
