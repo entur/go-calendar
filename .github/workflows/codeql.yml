@@ -1,0 +1,80 @@
+# Two CodeQL paths (ADR 0001):
+# - Pull requests: a local, narrowly privileged native job. The shared
+#   workflow's scanner job reads .entur/security/codescan.yml from the
+#   checked-out tree and can dismiss alerts, so it must not run on
+#   contributed code.
+# - Push to main and weekly: Entur's shared code-scan workflow, SHA-pinned,
+#   granted exactly the permission union it declares at that commit, and no
+#   secrets (all of its secrets are optional).
+name: CodeQL
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * 1" # weekly
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: manual
+          - language: actions
+            build-mode: none
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: matrix.language == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended # same as the shared workflow
+          config: |
+            query-filters:
+              - exclude:
+                  id: actions/missing-workflow-permissions
+      - if: matrix.language == 'go'
+        name: Build
+        run: go build ./...
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:${{ matrix.language }}
+
+  code-scan:
+    if: github.event_name != 'pull_request'
+    # Exactly the union of the job permissions code-scan.yml declares at
+    # 0962fb4f3f9004eeaea88582db8639e140ec6fda: semgrep/codeql analysis
+    # (actions, contents: read, packages, security-events), the scanner jobs
+    # (issues, pull-requests: write) and upload-dependency-graph
+    # (contents: write; a no-op for Go). Re-check on every Dependabot bump.
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      packages: read
+      pull-requests: write
+      security-events: write
+    uses: entur/gha-security/.github/workflows/code-scan.yml@0962fb4f3f9004eeaea88582db8639e140ec6fda # v2.17.1

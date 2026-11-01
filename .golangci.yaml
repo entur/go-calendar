@@ -1,0 +1,78 @@
+version: "2"
+
+# Based on entur/go-logging's configuration, plus the linters ADR 0001
+# requires: errorlint, exhaustive, nolintlint, gochecknoglobals and
+# gochecknoinits (no package state).
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - exhaustive
+    - gochecknoglobals
+    - gochecknoinits
+    - gocritic
+    - gosec
+    - mnd
+    - nolintlint
+    - revive
+    - unconvert
+  exclusions:
+    presets:
+      - comments
+    rules:
+      # Calendar arithmetic is defined by its constants: Hinnant's civil-date
+      # algorithm (date.go), the Meeus/Jones/Butcher computus (easter.go)
+      # and the statutory month/day/Easter-offset table (observance.go).
+      # Naming every constant would hide the published formulas.
+      - path: (^|/)(date|easter|observance)\.go$
+        linters:
+          - mnd
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+    mnd:
+      ignored-files:
+        - ".*_test.go" # don't include magic numbers tests in test files
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      enable-all-rules: true
+      rules:
+        - name: cognitive-complexity # Has the opposite effect of making logic harder to follow
+          disabled: true
+        - name: cyclomatic # Has the opposite effect of making logic harder to follow
+          disabled: true
+        - name: max-public-structs # Simply annoying
+          disabled: true
+        - name: line-length-limit # Simply annoying
+          disabled: true
+        - name: unused-receiver # Simply annoying
+          disabled: true
+        - name: unused-parameter # Simply annoying
+          disabled: true
+        - name: confusing-naming # Simply annoying
+          disabled: true
+        - name: add-constant # Simply annoying, as it prevents the use of 'return 0' statements
+          disabled: true
+        - name: use-errors-new # Prevents the use of fmt.Errorf, causing a sometimes confusing mix of fmt.Errorf and errors.New
+          disabled: true
+        - name: unnecessary-format # Prevents the use of fmt.Errorf, causing a sometimes confusing mix of fmt.Errorf and errors.New
+          disabled: true
+        - name: var-naming # Makes json <-> struct relationships more confusing
+          disabled: true
+        - name: function-length
+          disabled: true
+        - name: unhandled-error # These never return a non-nil error (documented); examples print to stdout
+          arguments:
+            - "fmt.Print"
+            - "fmt.Printf"
+            - "fmt.Println"
+            - "strings.Builder.WriteByte"
+            - "strings.Builder.WriteString"
+            - "bytes.Buffer.WriteByte"
+            - "bytes.Buffer.WriteString"
+formatters:
+  enable:
+    - gofmt
+    - goimports
