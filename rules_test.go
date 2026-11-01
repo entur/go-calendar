@@ -125,6 +125,13 @@ func observationsFixture(t testing.TB, r Range) []byte {
 // of the line and each bit is 1 for a workday and 0 otherwise.
 func workdaysFixture(t testing.TB, c Calendar, r Range) []byte {
 	t.Helper()
+	return workdaysFixtureWith(t, c, r, nil)
+}
+
+// workdaysFixtureWith is workdaysFixture with the dates in off forced to
+// non-workdays; tests use it to build synthetic rules records.
+func workdaysFixtureWith(t testing.TB, c Calendar, r Range, off map[Date]bool) []byte {
+	t.Helper()
 	var b bytes.Buffer
 	dates, err := r.Dates()
 	if err != nil {
@@ -143,7 +150,7 @@ func workdaysFixture(t testing.TB, c Calendar, r Range) []byte {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ok {
+		if ok && !off[d] {
 			b.WriteByte('1')
 		} else {
 			b.WriteByte('0')
@@ -324,36 +331,65 @@ func TestRulesHistory_Current(t *testing.T) {
 	}
 }
 
-// TestRulesHistory_AppendOnly compares the retained fixtures of every pair
-// of records on their overlap: the same identifier must agree everywhere; a
-// newer identifier must agree before its cutoff.
-func TestRulesHistory_AppendOnly(t *testing.T) {
-	history := rulesHistory()
-	for i, older := range history {
-		for _, newer := range history[i+1:] {
-			if older.rules == newer.rules {
-				compareRecords(t, older, newer, "")
-				continue
-			}
-			compareRecords(t, older, newer, firstCutoff(history, newer.rules))
-		}
-	}
+// A comparison is one pair of records that must agree on the overlap of
+// their spans, before cutoff when cutoff is non-empty.
+type comparison struct {
+	older, newer rulesRecord
+	cutoff       string
 }
 
-func firstCutoff(history []rulesRecord, rules string) string {
+// appendOnlyComparisons plans the append-only checks: every pair of records
+// of the same identifier (range extensions) must agree on their whole
+// overlap, and every record of an identifier must agree with every record
+// of the previous distinct identifier before the newer identifier's cutoff.
+// Non-adjacent identifiers are not compared directly: a cutoff only governs
+// differences from the previous identifier, and the adjacent checks chain.
+func appendOnlyComparisons(history []rulesRecord) []comparison {
+	var ids []string
+	byID := map[string][]rulesRecord{}
 	for _, rec := range history {
-		if rec.rules == rules {
-			return rec.cutoff
+		if _, seen := byID[rec.rules]; !seen {
+			ids = append(ids, rec.rules)
+		}
+		byID[rec.rules] = append(byID[rec.rules], rec)
+	}
+	var plan []comparison
+	for k, id := range ids {
+		recs := byID[id]
+		for i, older := range recs {
+			for _, newer := range recs[i+1:] {
+				plan = append(plan, comparison{older: older, newer: newer})
+			}
+		}
+		if k == 0 {
+			continue
+		}
+		cutoff := recs[0].cutoff
+		for _, older := range byID[ids[k-1]] {
+			for _, newer := range recs {
+				plan = append(plan, comparison{older: older, newer: newer, cutoff: cutoff})
+			}
 		}
 	}
-	return ""
+	return plan
 }
 
-// compareRecords checks that two records agree on the overlap of their
-// spans, up to cutoff when cutoff is non-empty.
-func compareRecords(t *testing.T, older, newer rulesRecord, cutoff string) {
+// TestRulesHistory_AppendOnly runs the append-only plan over the retained
+// fixtures.
+func TestRulesHistory_AppendOnly(t *testing.T) {
+	for _, c := range appendOnlyComparisons(rulesHistory()) {
+		for _, diff := range recordDifferences(t, c) {
+			t.Error(diff)
+		}
+	}
+}
+
+// recordDifferences compares the retained fixtures of c.older and c.newer
+// on the overlap of their spans, before c.cutoff when it is set, and
+// returns one message per differing fixture.
+func recordDifferences(t testing.TB, c comparison) []string {
 	t.Helper()
-	ro, rn := recordRange(t, older), recordRange(t, newer)
+	ro, rn := recordRange(t, c.older), recordRange(t, c.newer)
 	from, to := ro.start, ro.end
 	if rn.start.After(from) {
 		from = rn.start
@@ -361,34 +397,119 @@ func compareRecords(t *testing.T, older, newer rulesRecord, cutoff string) {
 	if rn.end.Before(to) {
 		to = rn.end
 	}
-	if cutoff != "" {
-		if c := mustDate(t, cutoff); c.Before(to) {
-			to = c
+	if c.cutoff != "" {
+		if cut := mustDate(t, c.cutoff); cut.Before(to) {
+			to = cut
 		}
 	}
 	if !from.Before(to) {
-		return
+		return nil
 	}
-	pairs := []struct {
+	type pair struct {
 		a, b  fixture
 		parse func(testing.TB, []byte, Range) answers
-	}{{older.observations, newer.observations, parseObservations}}
-	for i := range older.workdays {
-		pairs = append(pairs, struct {
-			a, b  fixture
-			parse func(testing.TB, []byte, Range) answers
-		}{older.workdays[i], newer.workdays[i], parseWorkdays})
 	}
+	pairs := []pair{{c.older.observations, c.newer.observations, parseObservations}}
+	for i := range c.older.workdays {
+		pairs = append(pairs, pair{c.older.workdays[i], c.newer.workdays[i], parseWorkdays})
+	}
+	var out []string
 	for _, p := range pairs {
 		ab, errA := os.ReadFile(p.a.path)
 		bb, errB := os.ReadFile(p.b.path)
 		if errA != nil || errB != nil {
-			t.Errorf("read fixtures: %v %v", errA, errB)
+			out = append(out, fmt.Sprintf("read fixtures: %v %v", errA, errB))
 			continue
 		}
 		if diffs := firstDifferences(p.parse(t, ab, ro), p.parse(t, bb, rn), from, to, 10); len(diffs) > 0 {
-			t.Errorf("%s (%s) and %s (%s) differ before %s:\n  %s", p.a.path, older.rules, p.b.path, newer.rules, to, strings.Join(diffs, "\n  "))
+			out = append(out, fmt.Sprintf("%s (%s) and %s (%s) differ before %s:\n  %s",
+				p.a.path, c.older.rules, p.b.path, c.newer.rules, to, strings.Join(diffs, "\n  ")))
 		}
+	}
+	return out
+}
+
+// syntheticRecord writes retained fixtures for a made-up rules record over
+// [start, end): the live observations, and the live workday membership with
+// the dates in off turned into non-workdays.
+func syntheticRecord(t *testing.T, dir, rules, start, end, cutoff string, off ...Date) rulesRecord {
+	t.Helper()
+	rec := rulesRecord{rules: rules, start: start, end: end, cutoff: cutoff, reason: "synthetic"}
+	r := recordRange(t, rec)
+	name := fmt.Sprintf("%s-%s-%s", strings.ReplaceAll(rules, "/", "-"), start, end)
+	write := func(suffix string, b []byte) fixture {
+		path := filepath.Join(dir, name+"-"+suffix+".txt")
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return fixture{path, sha256Hex(b)}
+	}
+	rec.observations = write("observations", observationsFixture(t, r))
+	flips := map[Date]bool{}
+	for _, d := range off {
+		flips[d] = true
+	}
+	for i := range rec.workdays {
+		rec.workdays[i] = write(comboName(i), workdaysFixtureWith(t, comboCalendar(t, i), r, flips))
+	}
+	return rec
+}
+
+func planDifferences(t *testing.T, history []rulesRecord) []string {
+	t.Helper()
+	var all []string
+	for _, c := range appendOnlyComparisons(history) {
+		all = append(all, recordDifferences(t, c)...)
+	}
+	return all
+}
+
+// TestRulesHistory_ThreeIdentifiers: v2 corrects 2026-11-02 (its cutoff);
+// v3 keeps that correction and corrects 2030-11-04 (its cutoff). Both
+// adjacent comparisons hold, so the history is valid; v1 and v3 are not
+// compared directly. A v3 that changes a date before its own cutoff is
+// rejected.
+func TestRulesHistory_ThreeIdentifiers(t *testing.T) {
+	dir := t.TempDir()
+	first, second := mustDate(t, "2026-11-02"), mustDate(t, "2030-11-04")
+	early := mustDate(t, "2028-06-01")
+	v1 := syntheticRecord(t, dir, "no-public/v1", "2026-01-01", "2031-01-01", "")
+	v2 := syntheticRecord(t, dir, "no-public/v2", "2026-01-01", "2031-01-01", first.String(), first)
+	v3 := syntheticRecord(t, dir, "no-public/v3", "2026-01-01", "2031-01-01", second.String(), first, second)
+	if diffs := planDifferences(t, []rulesRecord{v1, v2, v3}); len(diffs) != 0 {
+		t.Fatalf("valid three-identifier history rejected:\n%s", strings.Join(diffs, "\n"))
+	}
+	for _, c := range appendOnlyComparisons([]rulesRecord{v1, v2, v3}) {
+		if c.older.rules == "no-public/v1" && c.newer.rules == "no-public/v3" {
+			t.Fatal("non-adjacent identifiers must not be compared directly")
+		}
+	}
+	bad := syntheticRecord(t, dir, "no-public/v3-bad", "2026-01-01", "2031-01-01", second.String(), first, early, second)
+	if diffs := planDifferences(t, []rulesRecord{v1, v2, bad}); len(diffs) == 0 {
+		t.Fatal("a change before the newer identifier's cutoff was not detected")
+	}
+	reverted := syntheticRecord(t, dir, "no-public/v3-reverted", "2026-01-01", "2031-01-01", second.String(), second)
+	if diffs := planDifferences(t, []rulesRecord{v1, v2, reverted}); len(diffs) == 0 {
+		t.Fatal("silently reverting the previous identifier's correction was not detected")
+	}
+}
+
+// TestRulesHistory_RangeExtension: records of the same identifier must agree
+// on their whole overlap, with no cutoff.
+func TestRulesHistory_RangeExtension(t *testing.T) {
+	dir := t.TempDir()
+	base := syntheticRecord(t, dir, "no-public/v1", "2026-01-01", "2029-01-01", "")
+	ext := syntheticRecord(t, dir, "no-public/v1", "2028-01-01", "2031-01-01", "")
+	if diffs := planDifferences(t, []rulesRecord{base, ext}); len(diffs) != 0 {
+		t.Fatalf("valid range extension rejected:\n%s", strings.Join(diffs, "\n"))
+	}
+	changed := syntheticRecord(t, dir, "no-public/v1", "2028-02-01", "2031-01-01", "", mustDate(t, "2028-06-01"))
+	if diffs := planDifferences(t, []rulesRecord{base, changed}); len(diffs) == 0 {
+		t.Fatal("a range extension that changes an overlapping answer was not detected")
+	}
+	outside := syntheticRecord(t, dir, "no-public/v1", "2028-03-01", "2031-01-01", "", mustDate(t, "2030-06-03"))
+	if diffs := planDifferences(t, []rulesRecord{base, outside}); len(diffs) != 0 {
+		t.Fatalf("a difference outside the overlap must not count:\n%s", strings.Join(diffs, "\n"))
 	}
 }
 
