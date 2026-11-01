@@ -1,0 +1,14 @@
+# Default owners.
+* @entur/team-ki-effekt
+
+# Paths that need a code owner's review in particular: the retained rules
+# evidence and the CI/release configuration. Narrow these to a maintainers
+# team when one exists.
+/testdata/golden/ @entur/team-ki-effekt
+/testdata/usno/ @entur/team-ki-effekt
+/testdata/census/ @entur/team-ki-effekt
+/rules_test.go @entur/team-ki-effekt
+/.github/ @entur/team-ki-effekt
+/release-please-config.json @entur/team-ki-effekt
+/.release-please-manifest.json @entur/team-ki-effekt
+/CODEOWNERS @entur/team-ki-effekt

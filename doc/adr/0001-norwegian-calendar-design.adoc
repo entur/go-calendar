@@ -1,0 +1,226 @@
+= 1. Norwegian holiday and working-day calendar: design, freezing and supply chain
+
+Date: 2026-11-01
+
+== Status
+
+Accepted. Amended the same day with the accepted correctness review (coverage wording, the 2043-05-17 `Sondag` case, `Range` errors, location errors for `Date.In`, retained rules fixtures, the snapshot reader contract, scheduled tag audits and the Scorecard wording). The `Kind` constants are `KindHelligdag`, `KindHoytidsdag` and `KindCustomary` (lead decision during implementation): the unprefixed `Customary` would collide with the `Customary()` set function.
+
+== Context
+
+Entur needs Norwegian public holidays and conventional working days in Go. The first consumer is `entur/kompass`, whose Claude Code usage bands (entur/kompass#494) divide by the number of covered working days in a 28-day UTC window and freeze that calendar as part of a versioned statistical definition. Coverage comes from kompass's committed daily control rows; the calendar supplies the working-day predicate, not coverage. `github.com/rickar/cal/v2` was the inspiration. It has global mutable configuration (`DefaultLoc = time.Local`, a cache), mutable exported holiday pointers, `time.Time` as the date type, an `IsHoliday` that returns one holiday where Norway can have two (2027-05-17: grunnlovsdag and andre pinsedag), inclusive and reversible ranges, and a `no` package that omits første påskedag and første pinsedag and has no høytidsdag distinction.
+
+The module must be small, standard-library only, "super secure" and cheap to operate. This ADR records the converged result of two independent designs and a critique round (Claude Opus 5.5 and Codex gpt-6.1-sol, coordinated by the lead).
+
+== Decision
+
+=== Module and layout
+
+* Module `github.com/entur/go-calendar`, `go 1.26.0`, no `toolchain` line, no `require`, no `replace`. Zero dependencies, including in tests (no testify: a written deviation from the Entur Go guide's SHOULD).
+* Packages: `calendar` (root), `snapshot`, and the command `cmd/calendar-snapshot`.
+* A nested module `tools/` holds `govulncheck` and the module-hash checker (below) as `tool` directives. It is excluded from the root module's zip and never becomes a dependency of consumers.
+* License EUPL-1.2. Repository files: `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md` (release-please), `AGENTS.md` with `CLAUDE.md` as a symlink, `CODEOWNERS`, `doc/adr/`.
+
+=== Domain
+
+The library models Norwegian civil dates. It never reads the clock, chooses the process-local timezone implicitly, calls `time.LoadLocation`, or loads/embeds tzdata itself. Conversions use an explicit caller-supplied location. Passing `time.Local` can cause the standard library to initialize the system timezone; reproducible callers pass `time.UTC` or an explicitly loaded named location.
+
+[cols="2,2,3,1,1"]
+|===
+|Observance |Rule |Basis |Kind |Non-working by default
+
+|`Sondag` |every Sunday that carries no § 2 b–k observance |helligdagsfredloven § 2 a ("vanlige søndager") |KindHelligdag |yes (weekend)
+|`Nyttarsdag` |1 Jan |hfl § 2 b |KindHelligdag |yes
+|`Skjaertorsdag` |E−3 |hfl § 2 c |KindHelligdag |yes
+|`Langfredag` |E−2 |hfl § 2 d |KindHelligdag |yes
+|`ForstePaskedag` |E |hfl § 2 e |KindHelligdag |yes
+|`AndrePaskedag` |E+1 |hfl § 2 f |KindHelligdag |yes
+|`ArbeidernesDag` |1 May |lov om 1. og 17. mai § 1 |KindHoytidsdag |yes
+|`Grunnlovsdag` |17 May |lov om 1. og 17. mai § 1 |KindHoytidsdag |yes
+|`KristiHimmelfartsdag` |E+39 |hfl § 2 g |KindHelligdag |yes
+|`ForstePinsedag` |E+49 |hfl § 2 h |KindHelligdag |yes
+|`AndrePinsedag` |E+50 |hfl § 2 i |KindHelligdag |yes
+|`ForsteJuledag` |25 Dec |hfl § 2 j |KindHelligdag |yes
+|`AndreJuledag` |26 Dec |hfl § 2 k |KindHelligdag |yes
+|`OnsdagForSkjaertorsdag` |E−4 |none (collective agreements) |KindCustomary |opt-in
+|`Julaften` |24 Dec |none as a full day (aml § 10-10: no work from 15:00) |KindCustomary |opt-in
+|`Nyttarsaften` |31 Dec |none as a full day |KindCustomary |opt-in
+|===
+
+* E is første påskedag by the **Gregorian ecclesiastical computus**, not the astronomical full moon. The statute's parenthesis describes it only approximately: read astronomically, Easter 2019 would have been 24 March; Norway observed 21 April. `TestStatute2019_ComputusNotAstronomical` pins this.
+* A date can carry several observances (2008-05-01, 2027-05-17); the API returns a set. `Sondag` is present exactly when the date is Sunday and carries no § 2 b–k observance. A høytidsdag alone does not suppress `Sondag`: 2026-05-17 carries `Sondag` and `Grunnlovsdag`. When a May høytidsdag also coincides with a § 2 b–k observance, that observance suppresses `Sondag`: 2043-05-17 carries `ForstePinsedag` and `Grunnlovsdag`, without `Sondag`. Add this case to the collision tests.
+* `IsWorkday`: Monday–Friday and no observance in the calendar's day-off set. It is the conventional office-day calendar, not a legal "virkedag" (that word means different things in ferieloven § 5 and domstolloven § 149). No `IsVirkedag`. No half days, work hours, fellesferie, bridge days or substitute days.
+* Calendar queries support **2000-01-01 to 2099-12-31**; `2100-01-01` is allowed as an exclusive range end. Outside that, `ErrOutOfRange`. `Date` itself is valid for 0001-01-01..9999-12-31. Widening the range later is a `feat:`, not a new rules version, because it only turns errors into answers. The rules are a projection of current law onto those years, not a historical-law service.
+* Time zones: kompass looks up UTC date labels as Norwegian dates on purpose; that is documented in `doc.go` and recorded in every snapshot's `basis` line, never "fixed" by the library.
+
+=== API (root package `calendar`)
+
+[source,go]
+----
+type Error string
+func (e Error) Error() string
+const (
+	ErrZeroDate, ErrInvalidDate, ErrOutOfRange, ErrInvalidRange, ErrInvalidObservance,
+	ErrInvalidLocation, ErrNonexistentMidnight Error = ...
+)
+// Returned errors wrap these with context; errors.Is works.
+
+const (
+	MinYear      = 2000
+	MaxYear      = 2099
+	RulesVersion = "no-public/v1"
+)
+
+type Date struct{ rd int32 } // days since 0000-12-31; 0 is the zero value ("no date")
+func NewDate(year int, month time.Month, day int) (Date, error) // strict, no normalisation
+func ParseDate(s string) (Date, error)                          // exactly YYYY-MM-DD
+func DateAt(t time.Time, loc *time.Location) (Date, error)       // explicit, non-nil loc
+func (d Date) Date() (year int, month time.Month, day int)
+func (d Date) Year() int; Month() time.Month; Day() int
+func (d Date) Weekday() (time.Weekday, error)
+func (d Date) AddDays(n int) (Date, error)  // bounds checked before narrowing; min/max int safe
+func (d Date) Sub(e Date) (int, error)
+func (d Date) Compare(e Date) int; Before(e Date) bool; After(e Date) bool; IsZero() bool
+func (d Date) In(loc *time.Location) (time.Time, error) // validated midnight on d; reject a missing midnight
+func (d Date) String() string                            // "2026-05-17"; zero → "0000-00-00"
+func (d Date) AppendText(b []byte) ([]byte, error)
+func (d Date) MarshalText() ([]byte, error)
+func (d *Date) UnmarshalText(b []byte) error
+
+type Range struct{ start, end Date } // half-open [start, end); zero value is invalid
+func NewRange(start, end Date) (Range, error) // valid endpoints, start <= end; equal valid endpoints are an empty range
+func (r Range) Start() Date
+func (r Range) End() Date
+func (r Range) IsZero() bool
+func (r Range) Len() (int, error)
+func (r Range) Contains(d Date) (bool, error)
+func (r Range) Dates() (iter.Seq[Date], error) // validate before returning the sequence
+
+type Kind uint8 // KindHelligdag, KindHoytidsdag, KindCustomary (prefixed: `Customary` is the set function)
+type Observance uint8 // the 16 constants above, starting at 1
+func (o Observance) String() string // Norwegian name
+func (o Observance) Slug() string   // stable ASCII id, never renamed
+func (o Observance) Kind() Kind
+func (o Observance) Basis() string
+func (o Observance) DateIn(year int) (Date, error) // ErrInvalidObservance for Sondag and unknown values
+
+type ObservanceSet uint32
+func Statutory() ObservanceSet  // 13 entries incl. Sondag
+func Customary() ObservanceSet  // 3 entries
+func (s ObservanceSet) Has(o Observance) bool
+func (s ObservanceSet) All() iter.Seq[Observance]
+func (s ObservanceSet) Len() int
+func (s ObservanceSet) String() string
+
+func Easter(year int) (Date, error)
+
+type Calendar struct{ off ObservanceSet } // comparable value; zero value = weekends + Statutory() off
+func (c Calendar) WithDaysOff(o ...Observance) (Calendar, error) // Customary only; statutory is a no-op; unknown → ErrInvalidObservance
+func (c Calendar) DaysOff() ObservanceSet
+func (c Calendar) Observances(d Date) (ObservanceSet, error) // every known observance on d, opted in or not
+func (c Calendar) IsWorkday(d Date) (bool, error)
+func (c Calendar) Workdays(r Range) (iter.Seq[Date], error)  // validated up front; iterator cannot fail
+func (c Calendar) CountWorkdays(r Range) (int, error)
+----
+
+* No exported `var`, no `init`, no mutable package state, no cache, no goroutines (`gochecknoglobals`, `gochecknoinits`). `Calendar`, `Date`, `Range` and `ObservanceSet` are comparable values; `IsWorkday` and `Observances` allocate nothing (`TestZeroAllocs`).
+* Constructors, arithmetic, serialization and calendar/snapshot queries reject invalid inputs with errors. `Range{}` is invalid: `Len`, `Contains`, `Dates`, calendar range queries and snapshot range queries return `ErrInvalidRange` for it. `Contains` also rejects a zero date with `ErrZeroDate`. A range constructed from equal valid endpoints is valid and empty. Representation accessors and `IsZero` may inspect zero values: a zero Date has zero date components and the documented String form; a zero Range has zero Start and End. Date comparisons use ordinal order, with zero before every valid date; these inspection/comparison operations do not constitute successful date arithmetic or classification.
+* `DateAt` and `Date.In` reject a nil location with a contextual error wrapping a constant `ErrInvalidLocation`; `Date.In` rejects a zero receiver with `ErrZeroDate`. After constructing local midnight, `Date.In` verifies that the returned local year, month, day, clock and nanoseconds equal the requested date at 00:00:00.000000000. Otherwise it returns a contextual error wrapping a constant `ErrNonexistentMidnight`, rather than normalizing to another date or time. If midnight occurs twice, either matching midnight selected by `time.Date` is permitted; the API does not promise a unique instant. Add the two location error constants and regression tests for nil locations and the skipped Apia date.
+* One-off employer closures are **not** part of `Calendar`; they belong in a frozen snapshot (below).
+
+=== Rules identity
+
+* One rules implementation per module version and one identifier, `RulesVersion = "no-public/v1"`. The zero `Calendar` means "the rules of this module version". Callers who need stability freeze a snapshot; that, not the identifier, is the consumer boundary.
+* An unexported, append-only `rulesHistory` in a test file records each rules identifier and verified span, its comparison cutoff, fixture paths, and SHA-256 digests of the observation fixture and per-date workday membership for all 8 customary-option combinations (including the default empty combination). Retain the observation and per-date membership fixtures for every recorded identifier/span so tests can compare actual dates, not only whole-range hashes. Any changed answer within a previously verified span requires a new rules identifier and reviewed fixtures/digests. For changed law, the comparison cutoff is the civil effective date and every earlier answer must remain unchanged. For a bug correction, the cutoff is the earliest date whose answer is intentionally corrected, which may precede publication; record the issue and use a `fix!:` commit. A pure range extension adds a new verified-span record and fixture paths under the same identifier, leaves existing records/fixtures untouched, and must preserve every answer on every previously verified overlap. It is a `feat:` without a new rules identifier, as specified above.
+
+=== Frozen snapshots (`snapshot` package and `cmd/calendar-snapshot`)
+
+[source,go]
+----
+type Basis string
+const ( UTCDateLabels Basis = "utc-date-labels"; OsloCivilDates Basis = "oslo-civil-dates" )
+func Generate(c calendar.Calendar, r calendar.Range, basis Basis, closed ...calendar.Date) ([]byte, error)
+func Parse(b []byte) (*Frozen, error) // strict structural/canonical validation; constant ErrInvalidSnapshot on failure; never evaluate holiday rules
+func (f *Frozen) Rules() string; Basis() Basis; Span() calendar.Range; DaysOff() calendar.ObservanceSet; Closed() []calendar.Date
+func (f *Frozen) IsWorkday(d calendar.Date) (bool, error)          // outside the span: error, never false
+func (f *Frozen) Workdays(r calendar.Range) (iter.Seq[calendar.Date], error)
+func (f *Frozen) CountWorkdays(r calendar.Range) (int, error)
+----
+
+Canonical format, ASCII, LF, final newline, no comments, fixed order:
+
+----
+entur-calendar-snapshot 1
+rules no-public/v1
+basis utc-date-labels
+daysoff none                         (or sorted customary slugs, comma-joined)
+start 2026-11-01
+end 2036-01-01
+closed 2027-05-14                    (0..n, sorted, unique, inside the span)
+excluded 2026-12-25 forste-juledag   (every Monday–Friday non-workday in the span, sorted; slugs in Observance order, then "closed")
+days
+2026-11-02                           (every workday in the span, sorted)
+----
+
+* Membership is the `days` list. `Parse` checks the format version, known basis values, canonical header/slug grammar, valid civil dates, order, uniqueness, byte size (≤ 4 MiB), and span (≤ 100 years). `excluded` and `days` must be disjoint and together equal exactly the Monday–Friday dates in the span. Each excluded row has at least one reason. Every weekday in `closed` must occur in `excluded` with the `closed` reason, and that reason occurs only for dates declared in `closed`; weekend closures remain metadata only. Re-encoding must reproduce the input bytes exactly. The format's Monday–Friday base is fixed forever; another base requires a new format version.
+* `Parse` does not establish that observation reasons are legally correct or that the bytes came from `Generate`. It does not call `Easter`, `DateIn` or the current Calendar rules. The `rules` header is preserved metadata, not a requirement to equal the current `RulesVersion`; readers retain support for previously published identifiers and slugs. Date/span validation uses the frozen format's limits rather than the current Calendar year bounds. Correct generation is established by generator tests and approval of the consumer's pinned bytes.
+* `Frozen` owns immutable state: `Parse` copies any input storage it retains, and `Closed()` returns a copy. Mutating the input byte slice or an accessor result must not affect later answers. `IsWorkday`, `Workdays` and `CountWorkdays` return `ErrInvalidSnapshot` for nil/zero receivers; they must not panic or report successful empty membership. Metadata accessors return their zero values for nil/zero receivers. Add aliasing, previous-rules-identifier and zero-value regression tests.
+* `Generate` validates the Range and calendar year bounds, rejects an unknown basis, and rejects zero or out-of-span closure dates before producing output. It sorts and deduplicates closure inputs. The generated weekday partition and closure metadata satisfy the invariants checked by `Parse`.
+* `calendar-snapshot -start -end -basis [-daysoff a,b] [-closed d1,d2] [-verify-sha256 hex]` writes to stdout only, reads no files, fetches nothing, and exits non-zero on a digest mismatch.
+* Generator module version and Go version are not in the bytes; the consumer records them next to the frozen file.
+* A released consumer calendar version commits and embeds the exact canonical snapshot. Its append-only band manifest records the calendar identifier, span, basis and complete-file SHA-256, and a consumer test independently pins that approved digest. Initialization verifies the embedded bytes against the approved digest and rejects a mismatch or a window outside the frozen span. Normal builds and dependency updates never regenerate or overwrite an existing released calendar file. A changed date set receives a new consumer calendar/band version; production statistics never generate membership from the live rules. Reader upgrades must pass compatibility tests against previously approved frozen membership.
+
+=== Correctness evidence
+
+* Production computus: one algorithm (Meeus/Jones/Butcher or Oudin). Two independent oracles in tests (for example Gauss with Lichtenberg's correction and a Clavius epact-table implementation), agreeing for every year 1583–9999.
+* Two external tables committed as normalised plain data for 2000–2099, each produced by a committed script, never typed by hand, never fetched during tests: the US Naval Observatory observances API (`https://aa.usno.navy.mil/api/observances/christian?year=Y`, record apiversion) and the US Census Bureau Easter table. `testdata/SOURCES.md` records URLs, retrieval date, digests and that the files are factual dates with no licence asserted.
+* Literal statute test: each § 2 parenthesis ("siste torsdag før første påskedag", "sjette torsdag etter", "sjuende søndag etter", "første mandag etter") implemented by stepping weekdays, compared with `DateIn` for every year.
+* `Date` checked against `time.Date(..., time.UTC)` for every day 0001..9999 (runs in CI, not skipped under `-short`).
+* Collision tests (2008-05-01, 2027-05-17, 2007-05-17, 2012-05-17, 2032-05-17), `Sondag` rules, no substitute days, partition property of `CountWorkdays`, iterator contract (stops on break, reusable, no partial output before an error), arithmetic at min/max int and on 32-bit (`GOARCH=386` build and test in CI).
+* Fuzz targets: `ParseDate`, `AddDays`, `NewRange`, `snapshot.Parse` (accepted input re-encodes byte-identically). 20 s per target on PRs, 10 min per target weekly.
+* Goldens: initially `testdata/golden/observances-no-public-v1.txt` (every observance 2000–2099), plus per-date membership fixtures for all 8 customary-option combinations. `rulesHistory` records their spans, paths and digests. New identifiers and range extensions add fixtures without overwriting earlier ones. On mismatch the test reports the first differing dates and writes the regenerated file to `t.ArtifactDir()`. No `-update` step in CI.
+
+=== Supply chain and CI
+
+* Every `uses:` pinned to a full commit SHA with a version comment (written deviation from the Entur golden path's major tags; rationale: tags can be moved, `entur/gha-meta` moves floating tags on release, and a SHA pin of `entur/gha-security` also pins its `$/` local actions). Workflow lockfiles are adopted when they leave public preview.
+* All workflows: `permissions: {}` at top, job-level grants only; `persist-credentials: false`; `actions/setup-go` with `cache: false`; `GOTOOLCHAIN: local`; job timeouts; no `pull_request_target`, no `secrets: inherit`, no repository secrets, no PR text interpolated into shell.
+* `ci.yml` (pull_request, push to main, weekly): test matrix `floor` (`go-version-file: go.mod`) and `stable`; `gofmt -l`, `go mod tidy -diff` (root and tools), a zero-dependency check (`go list -m all` prints one line), `go vet`, `go test -race -shuffle=on ./...`, a `GOARCH=386` test leg; golangci-lint through its action with an exact version and a v2 config (`.golangci.yaml`, including gosec, errorlint, exhaustive, nolintlint, gochecknoglobals, gochecknoinits); govulncheck from `tools/` on stable; fuzz matrix; zizmor.
+* `codeql.yml`: on `pull_request`, a local native CodeQL job (languages `go` with `build-mode: manual` and `go build ./...`, and `actions`; `contents: read`, `security-events: write`, `actions: read`; no secrets). On push to main and weekly, `entur/gha-security/.github/workflows/code-scan.yml` SHA-pinned, granting exactly its declared permission union and no secrets. No `.entur/security/codescan.yml` in this public repository (the shared scanner reads it from the working tree and can dismiss alerts).
+* `scorecard.yml`: push to main and weekly; OSSF Scorecard with `publish_results: true`, SARIF upload, job-scoped `id-token: write` and `security-events: write`, no top-level env or writes.
+* `release.yml` (push to main): release-please with `GITHUB_TOKEN` and job-scoped `contents`, `pull-requests`, `issues: write`; then, if a release was created, a read-only `verify-module` job that downloads the tag through `proxy.golang.org` (recording it in sum.golang.org) and proves the module's `h1:` hash equals the hash of the tagged tree computed under Go's module-zip rules (nested `tools/` module and symlinks excluded), then `gh release verify`.
+* `tag-guard.yml` audits `v*` tags on push when that event is delivered, and also through a daily default-branch schedule and a main-ref `workflow_dispatch` audit. The trusted default-branch audit enumerates all current `v*` refs, peels tags to commits, and checks that each name/version and commit match an authorized release-please release commit on main. It uses API reads or trusted main-branch checker code and never executes code from the tag being inspected. It fails and notifies maintainers on a mismatch. The release workflow invokes the same audit explicitly after creating a tag, because a `GITHUB_TOKEN`-generated tag push does not trigger another push workflow. This is detection after creation, not a guarantee against consumption before an audit; scheduled runs can be delayed or dropped.
+* `dependabot.yml`: `github-actions` and `gomod` (`/` and `/tools`), monthly, `cooldown: default-days: 7` for version updates, grouped minor/patch, majors as individual PRs, separate `applies-to: security-updates` groups, commit prefixes `ci(deps)` and `chore(deps)` so no release is triggered.
+* Releases: release-please `release-type: go`, `include-component-in-tag: false`, `bump-minor-pre-major: true`, manifest `{".": "0.0.0"}`. The first release is **v0.1.0**; v1.0.0 after kompass has integrated against the API. A bad release is fixed forward with a `retract` directive in a new patch release; tags are never deleted or moved.
+* What "signed release" means here: the Go checksum database is the integrity anchor for module content; immutable GitHub releases add a platform release attestation (`gh release verify`); commits on main are verified. Tags are lightweight release-please tags and not signed. No binary assets are published and no separate SLSA build provenance is generated. Scorecard's Signed-Releases check ignores source-only releases and may report an inconclusive/not-applicable result when there are no eligible release assets. Record the result from the pinned tool version and explain the source-only limitation in the README; do not promise a low numerical score.
+
+=== Repository settings (applied by a repository admin before v0.1.0)
+
+* Ruleset `main`: PR required, 1 approval, code-owner review, dismiss stale approvals, approval of the latest push, conversation resolution, squash only, linear history, signed commits, required checks (CI legs, lint, vuln, fuzz, zizmor, CodeQL), code-scanning results gate, block force pushes and deletion, no bypass actors.
+* Ruleset `v*` tags: restrict updates and deletions, block force pushes. Restricting creation needs a release App as the only bypass actor (`GITHUB_TOKEN` cannot be a bypass actor); until then trusted default-branch tag audits detect stray tags, including ones without a delivered push event. These audits do not prevent initial publication or consumption.
+* Immutable releases on before the first release. Actions: read-only default token; "Allow GitHub Actions to create and approve pull requests" on (release-please); fork PR workflows require approval; require full-length SHA pins once a test PR shows `entur/gha-security`'s `$/` references pass.
+* Private vulnerability reporting, Dependabot alerts and security updates, secret scanning and push protection. Squash merge only; delete head branches. `@entur/team-ki-effekt` admin.
+* Release-PR runs created by `GITHUB_TOKEN` start in an approval-required state; a write user approves them before merging. A repository-scoped release GitHub App (org admin) is later hardening: it removes the approval step and allows "restrict tag creation".
+
+== Consequences
+
+=== Positive
+
+* No yearly data maintenance: holidays are computed; the evidence covers the whole supported range.
+* A released consumer obtains membership only from its hash-pinned snapshot, without the live holiday rules. A rule upgrade does not regenerate that consumer's bytes; reader upgrades must preserve the frozen-format contract and pass consumer compatibility tests. Changed library rules are detected by the library's retained fixtures and rulesHistory checks.
+* Zero dependencies and secretless, SHA-pinned CI leave the workflows and releases as the main attack surface, and those are least-privilege.
+
+=== Negative
+
+* Release PRs need a manual "approve workflows to run" until a release App exists. Unauthorized tag creation is audited after the fact, including through scheduled default-branch scans; it is not prevented and may be consumed before detection.
+* Two CodeQL paths (native on PRs, shared on main) must both be maintained.
+* `Calendar{}` follows the module's current rules; a live caller gets rule fixes on upgrade, which is the opposite of a frozen consumer. That is intended and documented.
+
+== Alternatives
+
+* `rickar/cal/v2` as a dependency: rejected for the reasons in Context.
+* Immutable rule selectors (`New(NorwayPublicV1)`, zero value fixed forever): rejected; a known bug could never be fixed for zero-value callers, and every selector keeps its code alive. Stability comes from snapshots.
+* Caller-supplied closed dates on `Calendar`: rejected; dates expire silently each year, and the slice makes `Calendar` non-comparable. Annual customary days are named observances; one-off closures go into snapshots.
+* A sparse day-off-only table in the root package: rejected; consumers would have to infer weekdays at read time, and diffs would not say what changed. The snapshot lists every workday plus excluded weekdays with reasons.
+* Years 1966–2199: rejected for v1; no consumer needs them, and pre-2000 answers add legal claims about the repealed 1965 act.
+* A GitHub App for release-please on day one: deferred; it needs an org admin and a long-lived key, while `GITHUB_TOKEN` PRs now run checks after approval.
+* harden-runner: not adopted; no job holds a secret. Revisit if one does.
