@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Report suspected vulnerabilities privately through GitHub's private vulnerability reporting: open the repository's **Security** tab and choose **Report a vulnerability**. Please do not open a public issue.
+Report suspected vulnerabilities privately through GitHub's private vulnerability reporting: <https://github.com/entur/go-calendar/security/advisories/new> (the repository's **Security** tab, **Report a vulnerability**). Please do not open a public issue.
 
 Include what you found, how to reproduce it, and the affected versions. We acknowledge reports within 5 working days, and triage and fix confirmed vulnerabilities within 30 days. We coordinate disclosure with you and credit you in the advisory unless you ask us not to.
 
